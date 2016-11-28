@@ -41,13 +41,13 @@ int parse_args(int argc, char * argv[])
 		if (!strcmp("-d", argv[i])) {
 			daemonize = true;
 		} else if (!strcmp("--cpu", argv[i])) {
-			if (i + 1 < last_opt_arg || argv[i + 1][0] == '-')
+			if (i + 1 >= last_opt_arg || argv[i + 1][0] == '-')
 				return -1;
 
 			cpu_perc = atoi(argv[i + 1]);
 			++i;
 		} else if (!strcmp("--net", argv[i])) {
-			if (i + 1 < last_opt_arg || argv[i + 1][0] == '-')
+			if (i + 1 >= last_opt_arg || argv[i + 1][0] == '-')
 				return -1;
 
 			cont_ip = strdup(argv[i + 1]);
