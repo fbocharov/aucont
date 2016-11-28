@@ -323,7 +323,6 @@ int container_create(container_t * container, container_attr_t * attr)
 	err = setup_user_ns(pid);
 	if (err)
 		goto cleanup;
-	}
 	
 	msg = 1;
 	err = write(pipe_to_cont, &msg, sizeof(msg));
