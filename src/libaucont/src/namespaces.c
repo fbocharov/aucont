@@ -37,21 +37,15 @@ int setup_mount_ns(char const * root)
 	if (!file_exists(path) && mkdir(path, 0777))
 		return -1;
 
-	if (mount(root, root, "bind", MS_BIND | MS_REC, NULL)) {
-		perror("binding");
+	if (mount(root, root, "bind", MS_BIND | MS_REC, NULL))
 		return -1;
-	}
 
 	sprintf(path, "%s/%s", root, old_root);
-	if (syscall(SYS_pivot_root, root, path)) {
-		perror("syscall");
+	if (syscall(SYS_pivot_root, root, path))
 		return -1;
-	}
 
-	if (chdir("/")) {
-		perror("chdir");
+	if (chdir("/"))
 		return -1;
-	}
 
 	sprintf(path, "/%s", old_root);
 	if (umount2(path, MNT_DETACH))
@@ -65,15 +59,11 @@ int map_user(int inside, int outside, int length, char const * mapfile)
 	char mapping[100];
 	sprintf(mapping, "%d %d %d", inside, outside, length);
 	int fd = open(mapfile, O_WRONLY);
-	if (!fd) {
-		perror("open user mapping");
+	if (fd < 0)
 		return -1;
-	}
 
-	if (write(fd, mapping, strlen(mapping)) < 0) {
-		perror("write user mapping");
+	if (write(fd, mapping, strlen(mapping)) < 0)
 		return -1;
-	}
 
 	close(fd);
 
@@ -85,21 +75,18 @@ int setup_user_ns(int pid)
 	char path[100];
 	sprintf(path, "/proc/%d/setgroups", pid);
 	int fd = open(path, O_WRONLY);
-	if (fd < 0) {
-		perror("open setgroups");
+	if (fd < 0)
 		return -1;
-	}
 
-	if (write(fd, "deny", 4) < 0) {
-		perror("write setgroups");
+	if (write(fd, "deny", 4) < 0)
 		return -1;
-	}
-	close(fd);
 
 	sprintf(path, "/proc/%d/uid_map", pid);
 	map_user(0, geteuid(), 1, path);
 	sprintf(path, "/proc/%d/gid_map", pid);
 	map_user(0, getegid(), 1, path);
+
+	close(fd);
 
 	return 0;
 }

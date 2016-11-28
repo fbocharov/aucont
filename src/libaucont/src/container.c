@@ -1,6 +1,9 @@
 #define _GNU_SOURCE
 #include <sched.h>
 
+#include <assert.h>
+#include <stdlib.h>
+
 #include "container.h"
 #include "namespaces.h"
 #include "util.h"
@@ -23,12 +26,13 @@ char STACK[CONT_STACK_SIZE];
 int container_exec_attr_init(container_exec_attr_t * attr,
 	int argc, char * argv[])
 {
+	int i;
+
 	attr->argc = argc;
 	attr->argv = (char **) malloc((argc + 1) * sizeof(*argv)); // +1 for NULL terminator
 	if (!attr->argv)
 		return -1;
 
-	int i;
 	for (i = 0; i < attr->argc; ++i) {
 		attr->argv[i] = strdup(argv[i]);
 		if (!attr->argv[i])
@@ -47,7 +51,8 @@ err_cleanup:
 
 int container_exec_attr_destroy(container_exec_attr_t * attr)
 {
-	for (int i = 0; i < attr->argc; ++i)
+	int i;
+	for (i = 0; i < attr->argc; ++i)
 		free(attr->argv[i]);
 	free(attr->argv);
 	return 0;
@@ -197,64 +202,65 @@ static int start_container(void * arg)
 {
 	cont_start_params_t * params = (cont_start_params_t *) arg;
 
-	if (params->attrs->daemonize && daemonize())
-		return -1;
+	if (params->attrs->daemonize && daemonize()) {
+		perror("container starter failed to daemonize:");
+		return EXIT_FAILURE;
+	}
 
 	if (unshare(CLONE_NEWPID)) {
-		perror("unshare");
+		perror("container starter failed to unshare:");
 		return EXIT_FAILURE;
 	}
 
 	int cont_fds[2];
 	if (pipe2(cont_fds, O_CLOEXEC)) {
-		perror("pipe2");
+		perror("container starter failed to create pipes:");
 		return EXIT_FAILURE;
 	}
 
 	int pid = fork();
 	if (pid < 0) {
-		perror("fork");
+		perror("container starter failed to fork:");
 		return EXIT_FAILURE;
 	}
 
 	if (pid == 0) {
 		if (read(cont_fds[0], &pid, sizeof(pid)) < 0) {
-			perror("cont child: read pid");
+			perror("container command executor failed to receive pid:");
 			return EXIT_FAILURE;
 		}
 
 		if (write(params->pipe_to_host, &pid, sizeof(pid)) < 0) {
-			perror("cont child: write pid to host");
+			perror("container command executor failed to send pid:");
 			return EXIT_FAILURE;
 		}
 
-		// wait for user namespace to be configured
+		// wait for user namespace and cgroups (maybe) to be configured
 		int msg;
 		if (read(params->pipe_from_host, &msg, sizeof(msg)) < 0) {
-			perror("cont child: read-wait for user ns");
+			perror("container command executor failed to receive sync message:");
 			return EXIT_FAILURE;
 		}
 
 		if (setup_uts_ns("container")) {
-			perror("cont child: setup_uts_ns");
+			perror("container command executor failed to setup hostname:");
 			return EXIT_FAILURE;
 		}
 
 		if (setup_mount_ns(params->attrs->rootfs)) {
-			perror("cont child: setup_mount_ns");
+			perror("container command executor failed to mount rootfs:");
 			return EXIT_FAILURE;
 		}
 
 		if (execv(params->attrs->exec.argv[0], params->attrs->exec.argv)) {
-			fprintf(stderr, "failed to exec");
-			perror("cont child: execvp");
+			perror("container command executor failed to exec:");
 			return EXIT_FAILURE;
 		}
 	}
 
 	// now child will do all ipc with host to prevent race on host<->cont pipe
 	if (write(cont_fds[1], &pid, sizeof(pid)) < 0) {
-		perror("cont: write");
+		perror("container starter failed to send pid:");
 		return EXIT_FAILURE;
 	}
 
@@ -262,7 +268,7 @@ static int start_container(void * arg)
 	close(cont_fds[1]);
 
 	if (wait(NULL) < 0) {
-		perror("cont: waitpid");
+		perror("container starter failed to wait child");
 		return EXIT_FAILURE;
 	}
 
@@ -271,7 +277,13 @@ static int start_container(void * arg)
 
 int container_create(container_t * container, container_attr_t * attr)
 {
-	int ret = 0;
+	int err = 0;
+	int flags = 0;
+	int to_cont[2];
+	int from_cont[2];
+	int pipe_to_cont, pipe_from_cont;
+	int pid;
+	int msg;
 
 	container->rootfs = strdup(attr->rootfs);
 	if (!container->rootfs)
@@ -279,7 +291,7 @@ int container_create(container_t * container, container_attr_t * attr)
 
 	container->daemon = attr->daemonize;
 
-	int flags = CLONE_NEWIPC  | CLONE_NEWNET | CLONE_NEWNS | 
+	flags = CLONE_NEWIPC  | CLONE_NEWNET | CLONE_NEWNS |
 				CLONE_NEWUSER | CLONE_NEWUTS;
 	if (!attr->daemonize)
 		flags |= SIGCHLD;
@@ -287,56 +299,47 @@ int container_create(container_t * container, container_attr_t * attr)
 	cont_start_params_t params;
 	params.attrs = attr;
 
-	int to_cont[2];
-	if (pipe2(to_cont, O_CLOEXEC)) {
-		perror("pipe");
-		ret = -1;
+	err = pipe2(to_cont, O_CLOEXEC);
+	if (err)
 		goto cleanup;
-	}
 	params.pipe_from_host = to_cont[0];
-	int pipe_to_cont = to_cont[1];
+	pipe_to_cont = to_cont[1];
 
-	int from_cont[2];
-	if (pipe2(from_cont, O_CLOEXEC)) {
-		perror("pipe");
-		ret = -1;
+	err = pipe2(from_cont, O_CLOEXEC);
+	if (err)
 		goto cleanup;
-	}
 	params.pipe_to_host = from_cont[1];
-	int pipe_from_cont = from_cont[0];
+	pipe_from_cont = from_cont[0];
 
-	if (clone(start_container, STACK + CONT_STACK_SIZE, flags, &params) < 0)
+	err = clone(start_container, STACK + CONT_STACK_SIZE, flags, &params);
+	if (err < 0)
 		goto cleanup;
 
-	int pid;
-	if (read(pipe_from_cont, &pid, sizeof(pid)) < 0) {
-		perror("read pid");
-		ret = -1;
+	err = read(pipe_from_cont, &pid, sizeof(pid));
+	if (err < 0)
 		goto cleanup;
-	}
 	container->pid = pid;
 
-	if (setup_user_ns(pid)) {
-		perror("setup user ns");
-		ret = -1;
+	err = setup_user_ns(pid);
+	if (err)
 		goto cleanup;
 	}
 	
-	int msg = 1;
-	if (write(pipe_to_cont, &msg, sizeof(msg)) < 0) {
-		perror("cont: write after setup user ns");
-		ret = -1;
+	msg = 1;
+	err = write(pipe_to_cont, &msg, sizeof(msg));
+	if (err < 0)
 		goto cleanup;
-	}
 
 	close(to_cont[0]);
 	close(to_cont[1]);
 	close(from_cont[0]);
 	close(from_cont[1]);
 
+	return 0;
+
 cleanup:
 	free(container->rootfs);
-	return ret;
+	return err;
 }
 
 int container_wait(container_t * container)
@@ -348,16 +351,15 @@ int container_wait(container_t * container)
 
 int container_stop(container_t * container, int signum)
 {
-	fprintf(stderr, "killing %d\n", container->pid);
-
 	if (kill(container->pid, signum) && errno != ESRCH)
 		return -1;
-
 	return 0;
 }
 
 int container_exec(container_t * container, container_exec_attr_t * attr)
 {
+	int pid;
+
 	if (enter_ns(container->pid, "user"))
 		return -1;
 
@@ -376,95 +378,93 @@ int container_exec(container_t * container, container_exec_attr_t * attr)
 	if (enter_ns(container->pid, "mnt"))
 		return -1;
 
-	int pd = fork();
-	if (pd < 0) {
-		perror("fork");
+	pid = fork();
+	if (pid < 0)
 		return -1;
-	}
 
-	if (pd == 0) {
-		if (execv(attr->argv[0], attr->argv)) {
-			perror("execvp");
+	if (pid == 0) {
+		// running command in container
+		if (execv(attr->argv[0], attr->argv))
 			return EXIT_FAILURE;
-		}
 	}
 
-	if (wait(NULL) < 0) {
-		perror("wait");
+	if (wait(NULL) < 0)
 		return -1;
-	}
 
 	return 0;
 }
 
 
 
+#define CONT_LIST_FILENAME "containers.list"
 #define MAX_CONT_COUNT 1024
 container_t containers[MAX_CONT_COUNT];
-const char * containers_list_filename = "containers.list";
 
-static int load_containters()
+static int load_containters(size_t * count)
 {
-	if (!file_exists(containers_list_filename)) {
-		return 0;
-	}
-
-	int cont_file = open(containers_list_filename, O_RDONLY);
-	if (cont_file < 0) {
-		perror("open");
-		return -1;
-	}
-
 	int pid;
 	int i = 0;
+	if (!file_exists(CONT_LIST_FILENAME))
+		return 0;
+
+	int cont_file = open(CONT_LIST_FILENAME, O_RDONLY);
+	if (cont_file < 0)
+		return -1;
+
 	while (read(cont_file, &pid, sizeof(pid)) > 0) {
 		containers[i].pid = pid;
+		++(*count);
 		++i;
 	}
 
-	return i;
+	return 0;
 }
 
-static int save_containers(int count)
+static int save_containers(size_t count)
 {
-	int cont_file = creat(containers_list_filename, S_IRUSR | S_IWUSR);
-	if (cont_file < 0) {
-		perror("open");
-		return -1;
-	}
+	int cont_file;
+	int i;
 
-	for (int i = 0; i < count; ++i) {
+	assert(count <= MAX_CONT_COUNT);
+
+	cont_file = creat(CONT_LIST_FILENAME, S_IRUSR | S_IWUSR);
+	if (cont_file < 0)
+		return -1;
+
+	for (i = 0; i < count; ++i) {
 		int pid = containers[i].pid;
-		if (write(cont_file, &pid, sizeof(pid)) < 0) {
-			perror("write");
+		if (write(cont_file, &pid, sizeof(pid)) < 0)
 			return -1;
-		}
 	}
 
-	if (close(cont_file)) {
-		perror("close");
+	if (close(cont_file))
 		return -1;
-	}
 
 	return 0;
 }
 
 int containers_add(container_t * cont)
 {
-	int count = load_containters();
-	// XXX: rootfs saved incorrectly, avoid using it!!!
+	size_t count = 0;
+
+	if (load_containters(&count))
+		return -1;
+
 	containers[count] = *cont;
-	save_containers(count + 1);
-	return 0;
+
+	return save_containers(count + 1);
 }
 
 int containers_rm(container_t * cont)
 {
-	int count = load_containters();
+	size_t i;
+	size_t count = 0;
+	if (load_containters(&count))
+		return -1;
+
 	if (count == 0)
 		return 0;
 
-	int i;
 	for (i = 0; i < count; ++i) {
 		if (containers[i].pid == cont->pid)
 			break;
@@ -478,4 +478,36 @@ int containers_rm(container_t * cont)
 	return 0;
 }
 
+int containers_get(int pid, container_t * cont)
+{
+	size_t i;
+	size_t count = 0;
+	if (load_containters(&count))
+		return -1;
 
+	for (i = 0; i < count; ++i) {
+		if (containers[i].pid == pid) {
+			*cont = containers[i];
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+int containers_get_all(container_t ** conts)
+{
+	size_t i = 0;
+	size_t cnt = 0;
+	if (load_containters(&cnt))
+		return -1;
+
+	*conts = (container_t *) calloc(cnt, sizeof(**conts));
+	if (!*conts)
+		return -1;
+
+	for (i = 0; i < cnt; ++i)
+		(*conts)[i].pid = containers[i].pid;
+
+	return cnt;
+}

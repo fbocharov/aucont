@@ -71,6 +71,10 @@ int containers_add(container_t * cont);
 
 int containers_rm(container_t * cont);
 
+int containers_get(int pid, container_t * cont);
+
+int containers_get_all(container_t ** conts);
+
 
 
 #endif	// CONTAINER_H

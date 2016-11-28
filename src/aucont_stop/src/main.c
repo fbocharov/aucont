@@ -13,25 +13,32 @@ void usage(char const * name)
 	printf("            default is SIGTERM (15)\n");
 }
 
-
-char const * containers_filename = "containers.list";
-
 int main(int argc, char * argv[])
 {
+	int pid;
+	int signum;
+	container_t cont;
+	int err = 0;
+
 	if (argc != 2 && argc != 3) {
 		printf("%d\n", argc);
 		usage(argv[0]);
 		return EXIT_FAILURE;
 	}
 
-	int pid = atoi(argv[1]);
-	int signum = SIGTERM;
+	pid = atoi(argv[1]);
+	signum = SIGTERM;
 	if (argc == 3)
 		signum = atoi(argv[2]);
 
-	// dirty but fast, redo in next version
-	container_t cont;
-	cont.pid = pid;
+	err = containers_get(pid, &cont);
+	if (err < 0) {
+		perror("cont get:");
+		return EXIT_FAILURE;
+	} else if (err == 0) {
+		// no container with such pid
+		return EXIT_SUCCESS;
+	}
 
 	if (container_stop(&cont, signum)) {
 		perror("container_stop");

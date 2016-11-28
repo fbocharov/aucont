@@ -1,26 +1,26 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 
-
-char const * containers_filename = "containers.list";
-
+#include <container.h>
 
 int main(int argc, char * argv[])
 {
-	int cont_file = open(containers_filename, O_RDONLY);
-	if (!cont_file) {
-		perror("fopen");
-		return -1;
+	container_t * containers;
+	size_t count = 0;
+	size_t i;
+
+	count = containers_get_all(&containers);
+	if (count < 0) {
+		perror("cont get all:");
+		return EXIT_FAILURE;
 	}
 
-	int pid;
-	while (read(cont_file, &pid, sizeof(pid)) > 0)
-		printf("%d\n", pid);
+	for (i = 0; i < count; ++i)
+		fprintf(stdout, "%d\n", containers[i].pid);
 
-	close(cont_file);
-
-	return 0;
+	return EXIT_SUCCESS;
 }
