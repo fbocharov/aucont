@@ -10,8 +10,8 @@
 int main(int argc, char * argv[])
 {
 	container_t * containers;
-	size_t count = 0;
-	size_t i;
+	int count = 0;
+	int i;
 
 	count = containers_get_all(&containers);
 	if (count < 0) {

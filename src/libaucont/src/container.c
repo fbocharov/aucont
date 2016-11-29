@@ -148,13 +148,14 @@ int container_attr_setnet(container_attr_t * attr, container_net_attr_t * net)
 static int daemonize()
 {
 	pid_t pid;
+	int fd;
 
 	/* Fork off the parent process */
 	pid = fork();
 
 	/* An error occurred */
 	if (pid < 0)
-		exit(EXIT_FAILURE);
+		return -1;
 
 	/* Success: Let the parent terminate */
 	if (pid > 0)
@@ -177,14 +178,31 @@ static int daemonize()
 
 	/* Change the working directory to the root directory */
 	/* or another appropriated directory */
-	// if (chdir("/"))
-	// 	return -1;
+	if (chdir("/"))
+		return -1;
 
-	/* Close all open file descriptors */
-	for (int fd = sysconf(_SC_OPEN_MAX); fd > 0; fd--) {
-		if (fd < 3)
-			close(fd);
+	fd = open("/dev/null", O_RDWR, 0);
+	if (fd < 0) {
+		perror("open /dev/null");
+		return -1;
 	}
+
+	if (dup2(fd, STDIN_FILENO) < 0) {
+		perror("dup2 stdin");
+		return -1;
+	}
+
+	if (dup2(fd, STDOUT_FILENO) < 0) {
+		perror("dup2 stdout");
+		return -1;
+	}
+
+	if (dup2(fd, STDERR_FILENO) < 0) {
+		perror("dup2 stderr");
+		return -1;
+	}
+
+	close(fd);
 
 	/* Set new file permissions */
 	umask(027);
@@ -203,64 +221,64 @@ static int start_container(void * arg)
 	cont_start_params_t * params = (cont_start_params_t *) arg;
 
 	if (params->attrs->daemonize && daemonize()) {
-		perror("container starter failed to daemonize:");
+		perror("container starter failed to daemonize");
 		return EXIT_FAILURE;
 	}
 
 	if (unshare(CLONE_NEWPID)) {
-		perror("container starter failed to unshare:");
+		perror("container starter failed to unshare");
 		return EXIT_FAILURE;
 	}
 
 	int cont_fds[2];
 	if (pipe2(cont_fds, O_CLOEXEC)) {
-		perror("container starter failed to create pipes:");
+		perror("container starter failed to create pipes");
 		return EXIT_FAILURE;
 	}
 
 	int pid = fork();
 	if (pid < 0) {
-		perror("container starter failed to fork:");
+		perror("container starter failed to fork");
 		return EXIT_FAILURE;
 	}
 
 	if (pid == 0) {
 		if (read(cont_fds[0], &pid, sizeof(pid)) < 0) {
-			perror("container command executor failed to receive pid:");
+			perror("container command executor failed to receive pid");
 			return EXIT_FAILURE;
 		}
 
 		if (write(params->pipe_to_host, &pid, sizeof(pid)) < 0) {
-			perror("container command executor failed to send pid:");
+			perror("container command executor failed to send pid");
 			return EXIT_FAILURE;
 		}
 
 		// wait for user namespace and cgroups (maybe) to be configured
 		int msg;
 		if (read(params->pipe_from_host, &msg, sizeof(msg)) < 0) {
-			perror("container command executor failed to receive sync message:");
+			perror("container command executor failed to receive sync message");
 			return EXIT_FAILURE;
 		}
 
 		if (setup_uts_ns("container")) {
-			perror("container command executor failed to setup hostname:");
+			perror("container command executor failed to setup hostname");
 			return EXIT_FAILURE;
 		}
 
 		if (setup_mount_ns(params->attrs->rootfs)) {
-			perror("container command executor failed to mount rootfs:");
+			perror("container command executor failed to mount rootfs");
 			return EXIT_FAILURE;
 		}
 
 		if (execv(params->attrs->exec.argv[0], params->attrs->exec.argv)) {
-			perror("container command executor failed to exec:");
+			perror("container command executor failed to exec");
 			return EXIT_FAILURE;
 		}
 	}
 
 	// now child will do all ipc with host to prevent race on host<->cont pipe
 	if (write(cont_fds[1], &pid, sizeof(pid)) < 0) {
-		perror("container starter failed to send pid:");
+		perror("container starter failed to send pid");
 		return EXIT_FAILURE;
 	}
 

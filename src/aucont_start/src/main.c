@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <limits.h>
 #include <stdlib.h>
 
 #include <sys/types.h>
@@ -62,7 +63,9 @@ int parse_args(int argc, char * argv[])
 		}
 	}
 
-	img_path = strdup(argv[i]);
+	img_path = realpath(argv[i], NULL);
+	if (!img_path)
+		return -1;
 	++i;
 
 	args_cnt = argc - i;
