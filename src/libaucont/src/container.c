@@ -6,6 +6,7 @@
 
 #include "container.h"
 #include "namespaces.h"
+#include "cgroups.h"
 #include "util.h"
 
 #include <stdlib.h>
@@ -341,6 +342,14 @@ int container_create(container_t * container, container_attr_t * attr)
 	err = setup_user_ns(pid);
 	if (err)
 		goto cleanup;
+
+	err = create_cpu_cgroup(pid, attr->cpu_percentage);
+	if (err)
+		goto cleanup;
+
+	err = add_to_cpu_cgroup(pid, pid);
+	if (err)
+		goto cleanup;
 	
 	msg = 1;
 	err = write(pipe_to_cont, &msg, sizeof(msg));
@@ -376,6 +385,16 @@ int container_stop(container_t * container, int signum)
 int container_exec(container_t * container, container_exec_attr_t * attr)
 {
 	int pid;
+	int p[2];
+	int msg;
+
+	if (pipe2(p, O_CLOEXEC))
+		return -1;
+
+	if (add_to_cpu_cgroup(container->pid, getpid())) {
+		perror("host executor failed to setup cgroup");
+		return -1;
+	}
 
 	if (enter_ns(container->pid, "user"))
 		return -1;
@@ -400,9 +419,22 @@ int container_exec(container_t * container, container_exec_attr_t * attr)
 		return -1;
 
 	if (pid == 0) {
-		// running command in container
-		if (execv(attr->argv[0], attr->argv))
+		if (read(p[0], &msg, sizeof(msg)) < 0) {
+			perror("container executor failed to receive sync msg");
 			return EXIT_FAILURE;
+		}
+
+		// running command in container
+		if (execv(attr->argv[0], attr->argv)) {
+			perror("container executor failed to exec");
+			return EXIT_FAILURE;
+		}
+	}
+
+	msg = 1;
+	if (write(p[1], &msg, sizeof(msg)) < 0) {
+		perror("host executor failed to send sync msg");
+		return -1;
 	}
 
 	if (wait(NULL) < 0)
