@@ -124,6 +124,11 @@ int container_attr_destroy(container_attr_t * attr)
 
 int container_attr_setcpu(container_attr_t * attr, size_t percentage)
 {
+	if (percentage > 100) {
+		errno = EINVAL;
+		return -1;
+	}
+
 	attr->cpu_percentage = percentage;
 	return 0;
 }
