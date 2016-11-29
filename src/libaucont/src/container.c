@@ -283,6 +283,12 @@ static int start_container(void * arg)
 			return EXIT_FAILURE;
 		}
 
+		msg = 1;
+		if (write(params->pipe_to_host, &msg, sizeof(msg))) {
+			perror("container command executor failed to send sync message");
+			return EXIT_FAILURE;
+		}
+
 		if (execv(params->attrs->exec.argv[0], params->attrs->exec.argv)) {
 			perror("container command executor failed to exec");
 			return EXIT_FAILURE;
@@ -373,6 +379,10 @@ int container_create(container_t * container, container_attr_t * attr)
 
 	msg = 1;
 	err = write(pipe_to_cont, &msg, sizeof(msg));
+	if (err < 0)
+		goto cleanup;
+
+	err = read(pipe_from_cont, &msg, sizeof(msg));
 	if (err < 0)
 		goto cleanup;
 
