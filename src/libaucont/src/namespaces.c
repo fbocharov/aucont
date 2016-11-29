@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include <sched.h>
 #include <unistd.h>
@@ -54,7 +55,7 @@ int setup_mount_ns(char const * root)
 	return 0;
 }
 
-int map_user(int inside, int outside, int length, char const * mapfile)
+static int map_user(int inside, int outside, int length, char const * mapfile)
 {
 	char mapping[100];
 	sprintf(mapping, "%d %d %d", inside, outside, length);
@@ -94,6 +95,62 @@ int setup_user_ns(int pid)
 int setup_uts_ns(char const * hostname)
 {
 	return sethostname(hostname, strlen(hostname));
+}
+
+#define HOST_VETH_NAME "%dhost"
+#define CONT_VETH_NAME "%dcont"
+
+int create_host_cont_veth(int pid, char const * host_ip, char const * cont_ip)
+{
+	char cmd[100];
+
+	sprintf(cmd, "sudo ip link add "HOST_VETH_NAME" type veth peer name "CONT_VETH_NAME, pid, pid);
+	if (system(cmd))
+		return -1;
+
+	sprintf(cmd, "sudo ip link set "CONT_VETH_NAME" netns %d", pid, pid);
+	if (system(cmd))
+		return -1;
+
+	return 0;
+}
+
+int up_veth_cont(int pid, char const * host_ip, char const * cont_ip)
+{
+	char cmd[100];
+
+	sprintf(cmd, "ip link set lo up");
+	if (system(cmd))
+		return -1;
+
+	sprintf(cmd, "ip addr add %s/24 dev "CONT_VETH_NAME, cont_ip, pid);
+	if (system(cmd))
+		return -1;
+
+	sprintf(cmd, "ip link set "CONT_VETH_NAME" up", pid);
+	if (system(cmd))
+		return -1;
+
+	sprintf(cmd, "ip route add default via %s", host_ip);
+	if (system(cmd))
+		return -1;
+
+	return 0;
+}
+
+int up_veth_host(int pid, char const * ip)
+{
+	char cmd[100];
+
+	sprintf(cmd, "sudo ip addr add %s/24 dev "HOST_VETH_NAME, ip, pid);
+	if (system(cmd))
+		return -1;
+
+	sprintf(cmd, "sudo ip link set "HOST_VETH_NAME" up", pid);
+	if (system(cmd))
+		return -1;
+
+	return 0;
 }
 
 int enter_ns(int pid, char const * nsname)

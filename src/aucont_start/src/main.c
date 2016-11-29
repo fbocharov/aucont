@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 
 #include <container.h>
 
@@ -21,7 +22,7 @@ int args_cnt = 0;
 char ** args = NULL;
 
 
-void usage(char const * name) 
+void usage(char const * name)
 {
 	printf("usage: %s [-d --cpu CPU_PERC --net IP] IMAGE_PATH CMD [ARGS]\n", name);
 	printf("  IMAGE_PATH - path to image of container file system\n");
@@ -100,8 +101,23 @@ int setup_daemon(container_attr_t * cont_attr)
 
 int setup_net(container_attr_t * cont_attr)
 {
-	// TODO: implement
-	return 0;
+	if (!cont_ip)
+		return 0;
+
+	container_net_attr_t net;
+	in_addr_t addr;
+	struct in_addr host_ip;
+
+	if (!inet_pton(AF_INET, cont_ip, &addr))
+		return -1;
+
+    addr = inet_addr(cont_ip);
+    host_ip.s_addr = htonl(ntohl(addr) + 1);
+
+	if (container_net_attr_init(&net, inet_ntoa(host_ip), cont_ip))
+		return -1;
+
+	return container_attr_setnet(cont_attr, &net);
 }
 
 int setup_cpu(container_attr_t * cont_attr)
@@ -114,7 +130,7 @@ int setup_cpu(container_attr_t * cont_attr)
 }
 
 
-int main(int argc, char * argv[]) 
+int main(int argc, char * argv[])
 {
 	if (argc < 3) {
 		usage(argv[0]);

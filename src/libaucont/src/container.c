@@ -266,6 +266,13 @@ static int start_container(void * arg)
 			return EXIT_FAILURE;
 		}
 
+		if (params->attrs->net.cont_ip) {
+			if (up_veth_cont(pid, params->attrs->net.cont_ip)) {
+				perror("container command executor failed to setup veth end");
+				return EXIT_FAILURE;
+			}
+		}
+
 		if (setup_uts_ns("container")) {
 			perror("container command executor failed to setup hostname");
 			return EXIT_FAILURE;
@@ -355,7 +362,15 @@ int container_create(container_t * container, container_attr_t * attr)
 	err = add_to_cpu_cgroup(pid, pid);
 	if (err)
 		goto cleanup;
-	
+
+	if (attr->net.host_ip && attr->net.cont_ip) {
+		if (create_host_cont_veth(container->pid, attr->net.host_ip, attr->net.cont_ip))
+			return -1;
+
+		if (up_veth_host(container->pid, attr->net.host_ip))
+			return -1;
+	}
+
 	msg = 1;
 	err = write(pipe_to_cont, &msg, sizeof(msg));
 	if (err < 0)
