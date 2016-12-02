@@ -267,7 +267,7 @@ static int start_container(void * arg)
 		}
 
 		if (params->attrs->net.cont_ip) {
-			if (up_veth_cont(pid, params->attrs->net.cont_ip)) {
+			if (up_veth_cont(pid, params->attrs->net.host_ip, params->attrs->net.cont_ip)) {
 				perror("container command executor failed to setup veth end");
 				return EXIT_FAILURE;
 			}
@@ -284,7 +284,7 @@ static int start_container(void * arg)
 		}
 
 		msg = 1;
-		if (write(params->pipe_to_host, &msg, sizeof(msg))) {
+		if (write(params->pipe_to_host, &msg, sizeof(msg)) < 0) {
 			perror("container command executor failed to send sync message");
 			return EXIT_FAILURE;
 		}
